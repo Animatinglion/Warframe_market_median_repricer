@@ -129,7 +129,7 @@ def api_patch(session: requests.Session, path: str, payload: dict) -> dict:
 def build_item_lookup(session: requests.Session) -> dict[str, dict]:
     """
     Fetch all tradable items once and return a dict keyed by item id.
-    Each value has: slug, name, icon_url
+    Each value has: slug, name
     This avoids N individual item fetches — one bulk call instead.
     """
     data  = api_get(session, "/items")
@@ -144,10 +144,7 @@ def build_item_lookup(session: requests.Session) -> dict[str, dict]:
         i18n    = item.get("i18n", {})
         en      = i18n.get("en", {})
         name    = en.get("name") or slug
-        # icon paths are relative — prepend the assets root to get a full URL
-        thumb   = en.get("thumb") or en.get("icon", "")
-        icon_url = f"{ASSETS_ROOT}/{thumb}" if thumb else None
-        lookup[item_id] = {"slug": slug, "name": name, "icon_url": icon_url}
+        lookup[item_id] = {"slug": slug, "name": name}
     return lookup
 
 
@@ -211,7 +208,7 @@ class ConfirmDialog:
     """
 
     def __init__(self, root, item_name: str, old_price: int, new_price: int,
-                 icon_url: str | None, remaining: int):
+                remaining: int):
         self.result = None
 
         win = tk.Toplevel(root)
@@ -289,8 +286,8 @@ class ConfirmDialog:
         root.wait_window(win)
 
 
-def ask_confirm_tk(root, item_name, old_price, new_price, icon_url, remaining) -> str:
-    dlg = ConfirmDialog(root, item_name, old_price, new_price, icon_url, remaining)
+def ask_confirm_tk(root, item_name, old_price, new_price, remaining) -> str:
+    dlg = ConfirmDialog(root, item_name, old_price, new_price, remaining)
     return dlg.result or "skip"
 
 
@@ -398,6 +395,7 @@ def show_summary_cli(low_volume, applied, skipped, no_data):
 
 def main():
     global _tk_root
+    _tk_root = None
     print("═" * 55)
     print("  WFM Median Repricer")
     print("═" * 55)
@@ -480,7 +478,7 @@ def main():
     # ── auto-apply price increases ──
     if to_apply_up:
         print(f"\n  Auto-applying {len(to_apply_up)} price increase(s)…")
-        for order_id, name, old, new, _ in to_apply_up:
+        for order_id, name, old, new in to_apply_up:
             try:
                 api_patch(session, f"/order/{order_id}", {"platinum": new})
                 print(f"    ↑  {name}: {old} → {new} plat")
@@ -498,9 +496,9 @@ def main():
     if to_confirm:
         print(f"\n  {len(to_confirm)} price decrease(s) need your confirmation.")
         if HAS_TK:
-            for idx, (order_id, name, old, new, icon_url) in enumerate(to_confirm):
+            for idx, (order_id, name, old, new) in enumerate(to_confirm):
                 remaining = len(to_confirm) - idx
-                decision = ask_confirm_tk(_tk_root, name, old, new, icon_url, remaining)
+                decision = ask_confirm_tk(_tk_root, name, old, new, remaining)
                 if decision == "apply":
                     try:
                         api_patch(session, f"/order/{order_id}", {"platinum": new})
@@ -515,7 +513,7 @@ def main():
                     skipped += len(to_confirm) - idx
                     break
         else:
-            for order_id, name, old, new, _ in to_confirm:
+            for order_id, name, old, new in to_confirm:
                 decision = ask_confirm_cli(name, old, new)
                 if decision == "apply":
                     try:
