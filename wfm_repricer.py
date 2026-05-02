@@ -12,7 +12,7 @@ are never touched and shown in a summary list at the end.
 
 Setup
 ─────
-1.  pip install curl_cffi Pillow   (tkinter ships with Python on Windows)
+1.  pip install curl_cffi keyring   (tkinter ships with Python on Windows)
 2.  Get your JWT token:
       - Log into warframe.market in your browser
       - Open DevTools (F12) → Application/Storage → Cookies → warframe.market
@@ -44,13 +44,13 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from PIL import Image, ImageTk
-    HAS_PIL = True
+    import keyring
 except ImportError:
-    HAS_PIL = False
+    print("ERROR: 'keyring' not installed.  Run:  pip install keyring")
+    sys.exit(1)
 
 # ── config ─────────────────────────────────────────────────────────────────────
-TOKEN_FILE      = Path("wfm_token.txt")
+SERVICE_ID      = "wfm_repricer" # service ID for credentials manager
 BASE_URL        = "https://api.warframe.market/v2"
 BASE_URL_V1     = "https://api.warframe.market/v1"   # stats endpoint still v1
 ASSETS_ROOT     = "https://warframe.market"
@@ -58,22 +58,34 @@ MIN_TRADES_48H  = 5          # minimum closed sales in 48 h to act on
 RATE_SLEEP      = 0.5         # seconds between API calls (be polite)
 # ──────────────────────────────────────────────────────────────────────────────
 
-
-def get_token() -> str:
-    if TOKEN_FILE.exists():
-        tok = TOKEN_FILE.read_text().strip()
-        if tok:
-            return tok
-    print("\nNo token found.")
+def print_token_instructions() -> None:
     print("To get your JWT token:")
     print("  1. Log into warframe.market in your browser")
     print("  2. Open DevTools (F12) → Application → Cookies → warframe.market")
     print("  3. Copy the value of the cookie named 'JWT'\n")
+
+def get_token() -> str:
+    tok = retrieve_token()
+    if tok:
+        return tok
+    print("\nNo token found.")
+    print_token_instructions()
     tok = input("Paste your JWT token here: ").strip()
-    TOKEN_FILE.write_text(tok)
-    print(f"Token saved to {TOKEN_FILE}\n")
+    save_token(tok)
+    print(f"Token saved to OS Credential manager\n")
     return tok
 
+def on_auth_error() -> None:
+    print("\nAuthentication failed. Possibly your token is invalid? You should update it.\n")
+    print_token_instructions()
+    tok = input("Paste your JWT token here: ").strip()
+    save_token(tok)
+
+def retrieve_token() -> str | None:
+    return keyring.get_password(SERVICE_ID, SERVICE_ID)
+
+def save_token(token: str) -> None:
+    keyring.set_password(SERVICE_ID, SERVICE_ID, token)
 
 def make_session(token: str) -> requests.Session:
     # impersonate="firefox" makes curl_cffi mimic Firefox's TLS fingerprint,
@@ -218,18 +230,6 @@ class ConfirmDialog:
         tk.Label(win, text=item_name,
                  font=("Segoe UI", 15, "bold"),
                  fg="#eaeaea", bg="#1a1a2e").pack(**pad, pady=6)
-
-        # ── image ──
-        if HAS_PIL and icon_url:
-            try:
-                with urlopen(icon_url, timeout=5) as resp:
-                    img_data = resp.read()
-                img = Image.open(BytesIO(img_data)).convert("RGBA")
-                img = img.resize((128, 128), Image.LANCZOS)
-                self._photo = ImageTk.PhotoImage(img)
-                tk.Label(win, image=self._photo, bg="#1a1a2e").pack(pady=4)
-            except Exception:
-                pass
 
         # ── price table ──
         frame = tk.Frame(win, bg="#16213e", bd=1, relief="solid")
@@ -415,6 +415,8 @@ def main():
         print(f"  Logged in as: {username}\n")
     except Exception as e:
         print(f"ERROR: Could not authenticate. Check your token.\n  {e}")
+        on_auth_error()
+        print("Script wil now exit. Restart to try again.")
         sys.exit(1)
 
     print("  Fetching item catalogue…")
@@ -442,7 +444,6 @@ def main():
         item_info = item_lookup.get(item_id, {})
         slug      = item_info.get("slug", item_id)   # fallback to id if unknown
         item_name = item_info.get("name", slug)
-        icon_url  = item_info.get("icon_url")
         cur_price = order.get("platinum", 0)
         order_id  = order["id"]
 
@@ -467,9 +468,9 @@ def main():
         if median == cur_price:
             continue  # already correct
         elif median > cur_price:
-            to_apply_up.append((order_id, item_name, cur_price, median, icon_url))
+            to_apply_up.append((order_id, item_name, cur_price, median))
         else:
-            to_confirm.append((order_id, item_name, cur_price, median, icon_url))
+            to_confirm.append((order_id, item_name, cur_price, median))
 
     print()  # newline after progress
 
